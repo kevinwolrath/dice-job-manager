@@ -1,14 +1,19 @@
-# dice-job-manager
+# MCP server proof of concept: dice job manager
 
-> **Portfolio demo status:** The browser chat and authorization regression scripts exercise the
-> tool-calling path through `/chat`. The separate standards-based MCP endpoint at `/mcp` is
-> implemented but has not been verified against a live MCP client in this environment. Docker
-> Desktop was unavailable during the GitHub publication check. Treat `/mcp` as experimental until
-> you run that connection test locally.
+This project explores **user-scoped MCP tools**. An MCP server exposes five dice-job and stock
+tools over streamable HTTP. Each request carries the caller's bearer token to the underlying
+services; the model cannot supply a different user ID. A local Ollama chat demo uses the same
+tool implementations to show what happens when an LLM calls them on a user's behalf.
 
-Multi-user, service-based backend for the dice job calculator. Built as a portfolio/learning
-project to demonstrate service-based architecture, Docker, PostgreSQL, multi-user auth, MCP,
-AI tool-calling, and defense against prompt injection.
+| Surface | Purpose | Verification |
+| --- | --- | --- |
+| [`/mcp`](services/mcp-server/app/mcp_tools.py) | MCP streamable HTTP endpoint for MCP clients | Implemented; live client connection still needs verification |
+| [`/chat`](services/mcp-server/app/api/chat.py) | Browser demo with Ollama tool calling | Exercised by the prompt-injection regression script |
+| [`app/tools.py`](services/mcp-server/app/tools.py) | Shared, token-forwarding tool implementations | Used by both surfaces |
+
+**Demo status:** Docker Desktop was unavailable during the GitHub publication check, so `/mcp`
+could not be verified with a live client in this environment. The documented chat and
+authorization tests were run during development; they were not rerun for publication.
 
 New here? **[`PORTFOLIO.md`](./PORTFOLIO.md)** is the short version — what this project
 demonstrates and the one design decision it's actually about. This file is the longer build log:
@@ -458,9 +463,9 @@ it a few seconds and refresh before assuming something's broken.
    ```
 
    Look in the logs for anything starting with `dice-mcp-server: /mcp` — that's the defensive
-   import guard around the real MCP protocol endpoint reporting whether it mounted cleanly. It's
-   fine either way: `/mcp` is a bonus (lets a real MCP client connect directly), not something
-   `/chat` depends on.
+   import guard around the MCP protocol endpoint reporting whether it mounted cleanly. If it
+   reports a failure, `/chat` may still work, but the MCP endpoint needs fixing before an MCP
+   client can connect.
 
 4. Open `http://localhost:5173`, log in as any demo user, and switch to the "Chat" tab (a dedicated
    full-page view, next to "Jobs" — both stay mounted, so switching back and forth doesn't reset

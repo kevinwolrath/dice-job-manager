@@ -1,4 +1,4 @@
-# dice-job-manager — portfolio notes
+# User-scoped MCP tools — portfolio notes
 
 **Demo scope:** The tested demo uses the `/chat` tool-calling endpoint. A streamable HTTP MCP
 endpoint is also implemented at `/mcp`, but its live client connection is not yet verified.
@@ -9,10 +9,10 @@ skimming this repo rather than running it, what's actually worth looking at, and
 
 ## What this project is
 
-A small, multi-user job-tracking backend (four FastAPI services, one Postgres instance, one
-containerized React client) built to demonstrate one specific idea end to end: **authorization
-that does not depend on an LLM's judgment**, in a system where an LLM is genuinely in the request
-path making tool calls on a user's behalf.
+An MCP server proof of concept backed by a small, multi-user job-tracking system (four FastAPI
+services, one Postgres instance, one containerized React client). Its central idea is
+**authorization that does not depend on an LLM's judgment** when a model calls tools on a user's
+behalf. The MCP endpoint is `/mcp`; the browser demo uses `/chat` and the same tool implementations.
 
 It's a proof of concept, not a product. There's no real business behind "dice job manager" — the
 domain (tracking custom dice-casting jobs) is borrowed from an existing personal app
@@ -47,6 +47,8 @@ push-button, CI-runnable scripts rather than a claim taken on faith.
 
 ## What to look at first
 
+- `services/mcp-server/app/mcp_tools.py` — the streamable HTTP MCP server, five tool definitions,
+  and request-level bearer-token handling. The live MCP client connection still needs verification.
 - `services/mcp-server/app/tools.py` — the five tools the model can call, and why none of them can
   reach another user's data by construction.
 - `services/mcp-server/app/api/chat.py` — the tool-calling loop, plus the code-level backstop
