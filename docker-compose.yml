@@ -1,0 +1,103 @@
+services:
+  dice-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dice_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dice_admin_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-dice_job_manager}
+    ports:
+      - "${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dice_admin} -d ${POSTGRES_DB:-dice_job_manager}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  dice-ollama:
+    image: ollama/ollama
+    ports:
+      - "${OLLAMA_HOST_PORT:-4110}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+  dice-user-service:
+    build: ./services/user-service
+    depends_on:
+      dice-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://user_service_role:user_service_dev_pw@dice-postgres:5432/${POSTGRES_DB:-dice_job_manager}
+      JWT_PRIVATE_KEY_PATH: /app/secrets/jwt_private.pem
+      JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
+    volumes:
+      - ./secrets:/app/secrets:ro
+    ports:
+      - "4101:4101"
+    restart: unless-stopped
+
+  dice-stock-service:
+    build: ./services/stock-service
+    depends_on:
+      dice-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://stock_service_role:stock_service_dev_pw@dice-postgres:5432/${POSTGRES_DB:-dice_job_manager}
+      JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
+    volumes:
+      - ./secrets:/app/secrets:ro
+    ports:
+      - "4102:4102"
+    restart: unless-stopped
+
+  dice-job-service:
+    build: ./services/job-service
+    depends_on:
+      dice-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://job_service_role:job_service_dev_pw@dice-postgres:5432/${POSTGRES_DB:-dice_job_manager}
+      JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
+    volumes:
+      - ./secrets:/app/secrets:ro
+    ports:
+      - "4103:4103"
+    restart: unless-stopped
+
+  dice-mcp-server:
+    build: ./services/mcp-server
+    depends_on:
+      - dice-job-service
+      - dice-stock-service
+      - dice-ollama
+    environment:
+      JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
+      JOB_SERVICE_URL: http://dice-job-service:4103
+      STOCK_SERVICE_URL: http://dice-stock-service:4102
+      USER_SERVICE_URL: http://dice-user-service:4101
+      OLLAMA_URL: http://dice-ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+    volumes:
+      - ./secrets:/app/secrets:ro
+    ports:
+      - "4104:4104"
+    restart: unless-stopped
+
+  dice-test-client:
+    build: ./dice-test-client
+    depends_on:
+      - dice-user-service
+      - dice-stock-service
+      - dice-job-service
+      - dice-mcp-server
+    ports:
+      - "5173:5173"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama-models:

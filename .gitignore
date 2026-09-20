@@ -1,0 +1,43 @@
+# Secrets — the RS256 key pair (user-service signs with the private half;
+# every other service verifies with the public half only) must never be
+# committed, even though this is local-dev-only. Same for any real .env.
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node (dice-test-client)
+node_modules/
+dist/
+dist-ssr/
+npm-debug.log*
+.vite/
+
+# Docker
+docker-compose.override.yml
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
