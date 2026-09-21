@@ -15,6 +15,10 @@ tool implementations to show what happens when an LLM calls them on a user's beh
 could not be verified with a live client in this environment. The documented chat and
 authorization tests were run during development; they were not rerun for publication.
 
+**Local demo only:** Compose binds every host port to `127.0.0.1`. The checked-in database and
+demo-user passwords are intentionally known test values; do not expose this stack to a network
+or reuse those passwords for real accounts.
+
 New here? **[`PORTFOLIO.md`](./PORTFOLIO.md)** is the short version — what this project
 demonstrates and the one design decision it's actually about. This file is the longer build log:
 phase-by-phase, with the exact commands to bring the stack up and verify each piece yourself.

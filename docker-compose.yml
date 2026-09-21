@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dice_admin_dev_pw}
       POSTGRES_DB: ${POSTGRES_DB:-dice_job_manager}
     ports:
-      - "${POSTGRES_HOST_PORT:-55432}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d
@@ -20,7 +20,7 @@ services:
   dice-ollama:
     image: ollama/ollama
     ports:
-      - "${OLLAMA_HOST_PORT:-4110}:11434"
+      - "127.0.0.1:${OLLAMA_HOST_PORT:-4110}:11434"
     volumes:
       - ollama-models:/root/.ollama
     restart: unless-stopped
@@ -37,7 +37,7 @@ services:
     volumes:
       - ./secrets:/app/secrets:ro
     ports:
-      - "4101:4101"
+      - "127.0.0.1:4101:4101"
     restart: unless-stopped
 
   dice-stock-service:
@@ -51,7 +51,7 @@ services:
     volumes:
       - ./secrets:/app/secrets:ro
     ports:
-      - "4102:4102"
+      - "127.0.0.1:4102:4102"
     restart: unless-stopped
 
   dice-job-service:
@@ -65,7 +65,7 @@ services:
     volumes:
       - ./secrets:/app/secrets:ro
     ports:
-      - "4103:4103"
+      - "127.0.0.1:4103:4103"
     restart: unless-stopped
 
   dice-mcp-server:
@@ -84,7 +84,7 @@ services:
     volumes:
       - ./secrets:/app/secrets:ro
     ports:
-      - "4104:4104"
+      - "127.0.0.1:4104:4104"
     restart: unless-stopped
 
   dice-test-client:
@@ -95,7 +95,7 @@ services:
       - dice-job-service
       - dice-mcp-server
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     restart: unless-stopped
 
 volumes:
