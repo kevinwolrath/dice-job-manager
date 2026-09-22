@@ -287,6 +287,34 @@ button[type="submit"] {
   text-transform: uppercase;
   color: #888;
   margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-cache-badge {
+  text-transform: none;
+  background: #e6f4ea;
+  color: #1e7e34;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+.chat-duration-badge {
+  text-transform: none;
+  background: #eef0f3;
+  color: #555;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 0.9em;
+  font-family: monospace;
+}
+
+.chat-cache-stats {
+  margin-top: 8px;
+  margin-bottom: 0;
 }
 
 .chat-turn-content {

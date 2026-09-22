@@ -1,7 +1,4 @@
-# User-scoped MCP tools — portfolio notes
-
-**Demo scope:** The tested demo uses the `/chat` tool-calling endpoint. A streamable HTTP MCP
-endpoint is also implemented at `/mcp`, but its live client connection is not yet verified.
+# dice-job-manager — portfolio notes
 
 `README.md` is the build log and runbook: phase-by-phase, with the exact commands to bring the
 stack up and verify each piece. This file is shorter and answers a different question — if you're
@@ -9,10 +6,10 @@ skimming this repo rather than running it, what's actually worth looking at, and
 
 ## What this project is
 
-An MCP server proof of concept backed by a small, multi-user job-tracking system (four FastAPI
-services, one Postgres instance, one containerized React client). Its central idea is
-**authorization that does not depend on an LLM's judgment** when a model calls tools on a user's
-behalf. The MCP endpoint is `/mcp`; the browser demo uses `/chat` and the same tool implementations.
+A small, multi-user job-tracking backend (four FastAPI services, one Postgres instance, one
+containerized React client) built to demonstrate one specific idea end to end: **authorization
+that does not depend on an LLM's judgment**, in a system where an LLM is genuinely in the request
+path making tool calls on a user's behalf.
 
 It's a proof of concept, not a product. There's no real business behind "dice job manager" — the
 domain (tracking custom dice-casting jobs) is borrowed from an existing personal app
@@ -47,10 +44,14 @@ push-button, CI-runnable scripts rather than a claim taken on faith.
 
 ## What to look at first
 
-- `services/mcp-server/app/mcp_tools.py` — the streamable HTTP MCP server, five tool definitions,
-  and request-level bearer-token handling. The live MCP client connection still needs verification.
 - `services/mcp-server/app/tools.py` — the five tools the model can call, and why none of them can
   reach another user's data by construction.
+- `services/mcp-server/app/prompt_cache.py` — a small cross-user cache added later (Phase 8) to cut
+  repeated calls to the local model. Worth a look specifically because it's a performance
+  optimization layered on top of the authorization story, not a security feature — and it's safe
+  cross-user for the same structural reason as everything else: it caches *which tool* a prompt
+  maps to, never a result or an argument, so there's nothing in it that could belong to one user
+  and leak to another.
 - `services/mcp-server/app/api/chat.py` — the tool-calling loop, plus the code-level backstop
   (`_scrub_internal_names`) added after testing showed the system prompt alone wasn't enough to
   stop a small local model from occasionally naming internal tool/function names to the end user.

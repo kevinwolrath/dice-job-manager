@@ -77,4 +77,7 @@ export const jobApi = {
 export const mcpApi = {
   chat: (token, message, history) =>
     request(MCP_SERVICE_URL, "/chat", { method: "POST", token, body: { message, history } }),
+  // Phase 8: aggregate hit/miss counts for the cross-user tool-selection
+  // cache (app/prompt_cache.py) — no prompt text or user data, just counts.
+  cacheStats: (token) => request(MCP_SERVICE_URL, "/cache-stats", { token }),
 };

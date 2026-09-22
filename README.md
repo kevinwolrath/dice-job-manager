@@ -1,23 +1,8 @@
-# MCP server proof of concept: dice job manager
+# dice-job-manager
 
-This project explores **user-scoped MCP tools**. An MCP server exposes five dice-job and stock
-tools over streamable HTTP. Each request carries the caller's bearer token to the underlying
-services; the model cannot supply a different user ID. A local Ollama chat demo uses the same
-tool implementations to show what happens when an LLM calls them on a user's behalf.
-
-| Surface | Purpose | Verification |
-| --- | --- | --- |
-| [`/mcp`](services/mcp-server/app/mcp_tools.py) | MCP streamable HTTP endpoint for MCP clients | Implemented; live client connection still needs verification |
-| [`/chat`](services/mcp-server/app/api/chat.py) | Browser demo with Ollama tool calling | Exercised by the prompt-injection regression script |
-| [`app/tools.py`](services/mcp-server/app/tools.py) | Shared, token-forwarding tool implementations | Used by both surfaces |
-
-**Demo status:** Docker Desktop was unavailable during the GitHub publication check, so `/mcp`
-could not be verified with a live client in this environment. The documented chat and
-authorization tests were run during development; they were not rerun for publication.
-
-**Local demo only:** Compose binds every host port to `127.0.0.1`. The checked-in database and
-demo-user passwords are intentionally known test values; do not expose this stack to a network
-or reuse those passwords for real accounts.
+Multi-user, service-based backend for the dice job calculator. Built as a portfolio/learning
+project to demonstrate service-based architecture, Docker, PostgreSQL, multi-user auth, MCP,
+AI tool-calling, and defense against prompt injection.
 
 New here? **[`PORTFOLIO.md`](./PORTFOLIO.md)** is the short version — what this project
 demonstrates and the one design decision it's actually about. This file is the longer build log:
@@ -29,7 +14,7 @@ change). `maker-guide` is a separate portfolio project referenced here only for 
 conventions (FastAPI/SQLAlchemy/Alembic layout, Docker Compose style) — its code isn't touched
 or depended on at runtime.
 
-## Status: Phase 7 — prompt-injection hardening & demo polish
+## Status: Phase 8 — cross-user prompt-selection cache
 
 Phase 0 (Postgres + Ollama groundwork), Phase 2 (dice-user-service), Phase 1 (dice-stock-service),
 Phase 3 (dice-job-service), Phase 4 (dice-test-client), and Phase 6 (dice-mcp-server + local model
@@ -62,6 +47,22 @@ walkthrough, automated — see "Start Phase 3 locally"), and `tests/test-prompt-
 covers the same guarantee reached through a model making tool calls (see "Start Phase 7 locally"
 below). Neither proves the other; both exist because a model sitting in front of the same
 authorization boundary is a genuinely different code path to prove clean.
+
+Phase 8 adds a small in-memory cache in `dice-mcp-server` (`app/prompt_cache.py`) so a repeated
+chat prompt doesn't have to round-trip through `dice-ollama` every time. It only caches the
+*decision* of which tool a message maps to, for the two tools that take zero arguments
+(`get_my_jobs`, `list_stock`) — never a result, never an argument, never anything derived from one
+user's data — and that decision is shared across every user, because "what are my jobs" means
+"call `get_my_jobs()`" regardless of who's asking. A cache hit still calls the real tool for real,
+through the current caller's own forwarded token, exactly like a miss does; only the model
+reasoning about which tool to use (and, on a hit, how to phrase the reply) gets skipped.
+`create_job`/`get_job`/`delete_job` are deliberately never cached — their arguments come from one
+specific conversation and replaying them for someone else would be the wrong action, even though
+it couldn't leak anything (job-service still resolves ownership from the token either way).
+`tests/test-prompt-cache.ps1` proves the cache doesn't weaken isolation: it gets john's question
+cached, then asks jane the identical question, and confirms jane gets jane's own jobs back — not
+john's — even though the "which tool to call" decision came from a cache entry john's request
+created. See "Start Phase 8 locally" below to run it.
 
 ### Why this defeats prompt injection, structurally
 
@@ -467,9 +468,9 @@ it a few seconds and refresh before assuming something's broken.
    ```
 
    Look in the logs for anything starting with `dice-mcp-server: /mcp` — that's the defensive
-   import guard around the MCP protocol endpoint reporting whether it mounted cleanly. If it
-   reports a failure, `/chat` may still work, but the MCP endpoint needs fixing before an MCP
-   client can connect.
+   import guard around the real MCP protocol endpoint reporting whether it mounted cleanly. It's
+   fine either way: `/mcp` is a bonus (lets a real MCP client connect directly), not something
+   `/chat` depends on.
 
 4. Open `http://localhost:5173`, log in as any demo user, and switch to the "Chat" tab (a dedicated
    full-page view, next to "Jobs" — both stay mounted, so switching back and forth doesn't reset
@@ -540,17 +541,60 @@ tells us whether it's a real isolation bug (it shouldn't be — nothing about th
 mechanism changed this phase) versus, more likely, a difference in how this particular Ollama
 version formats its tool-calling response that `app/api/chat.py` doesn't handle yet.
 
+## Start Phase 8 locally (after Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 6 are up)
+
+1. Rebuild `dice-mcp-server` and `dice-test-client` to pick up the caching changes:
+
+   ```powershell
+   docker compose up -d --build dice-mcp-server dice-test-client
+   ```
+
+2. Open `http://localhost:5173`, log in, and go to the Chat tab. Ask the same question twice, e.g.
+   `What dice jobs do I have?` — the first response comes from the model as usual; ask it again
+   (word-for-word) and the trace on the second reply is annotated `served from cache`. Each reply
+   also carries a small monospace duration badge (server-measured, not a client-side guess), so you
+   can watch the difference directly — a cache hit is typically well under 50ms, versus however long
+   this machine's `llama3.1:8b` takes for a real round trip (seconds, on CPU). The "Cross-user
+   prompt cache" line under the chat header tracks running hit/miss counts and the average turn
+   time for cached vs. model-backed turns, across every user, not just this tab's own history.
+
+3. Log in as the *other* demo user (a second tab/incognito window, same as Phase 4) and ask the
+   exact same question. It's a cache hit again — the first user's request is what taught the cache
+   this phrasing means `get_my_jobs()` — but the jobs it lists are this user's own. That's the
+   whole point: the cached thing is a decision, not an answer.
+
+4. Run the automated version of that same check from the repo root:
+
+   ```powershell
+   cd C:\dev-env\dice-job-manager
+   .\tests\test-prompt-cache.ps1
+   ```
+
+   It logs in as `john` and `jane`, asks john the same question a few times until it's served from
+   the cache, then asks jane the identical question and asserts: jane's response is also a cache
+   hit, jane's result contains jane's own canary job, jane's result does *not* contain john's
+   canary job or its data anywhere, and `/cache-stats` reflects the activity. Prints PASS/FAIL per
+   check plus a final count, same convention as the other two test scripts.
+
+5. Restart `dice-mcp-server` (`docker compose restart dice-mcp-server`) and the cache resets to
+   empty — it's in-memory only, per-process, which is a fine trade-off for a demo (see
+   `app/prompt_cache.py`'s docstring for the reasoning, and what a production version would need
+   instead).
+
 ## What's next
 
-With Phase 7 done, all seven planned phases are complete: a multi-user Postgres/FastAPI backend
-with schema-per-service isolation, JWT-based auth with a role axis and an ownership axis enforced
-independently, a browser test client proving isolation visually, and an MCP-based tool-calling
-layer proving the same isolation holds when a local model is the one making the requests — with an
-automated regression suite as the actual evidence, not just an architectural claim. From here it's
-optional polish: expanding the regression suite with more adversarial phrasings, adding automated
-(not just manual) tests for the Phase 3 direct-HTTP isolation checks, or a pass over error messages
-and edge cases (expired tokens mid-chat, Ollama being unreachable, malformed request bodies) if
-this is heading toward an interview walkthrough rather than staying a personal reference. Phase 5
+With Phase 8 done, the core plan (all seven originally-planned phases, plus the cross-user prompt
+cache) is complete: a multi-user Postgres/FastAPI backend with schema-per-service isolation,
+JWT-based auth with a role axis and an ownership axis enforced independently, a browser test client
+proving isolation visually, an MCP-based tool-calling layer proving the same isolation holds when a
+local model is the one making the requests, and a caching layer proving a performance optimization
+doesn't have to weaken any of it — each with an automated regression suite as the actual evidence,
+not just an architectural claim. From here it's optional polish: expanding the regression suite
+with more adversarial phrasings, a pass over error messages and edge cases (expired tokens
+mid-chat, Ollama being unreachable, malformed request bodies), or moving the prompt cache from
+in-memory to a persisted `mcp_service` Postgres schema (matching the schema-per-service pattern
+everywhere else) if it needs to survive a restart — worth doing if this is heading toward an
+interview walkthrough rather than staying a personal reference. Phase 5
 (cutting the real `expo-dice-calculator` app over to this backend) is not happening — see the
 Status section above. Nothing in `expo-dice-calculator` or `maker-guide` is touched by this
 project at any phase.

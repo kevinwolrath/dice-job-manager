@@ -20,10 +20,12 @@ same guarantee, now reachable through a model instead of direct HTTP calls.
 """
 import json
 import re
+import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+from app import prompt_cache
 from app.api.deps import current_user_token
 from app.core.config import get_settings
 from app.tools import create_job, delete_job, get_job, get_my_jobs, list_stock
@@ -207,20 +209,117 @@ def _parse_tool_arguments(raw) -> dict:
         return {}
 
 
+def _render_my_jobs_reply(result) -> str:
+    if isinstance(result, dict) and "error" in result:
+        return f"I couldn't look up your dice jobs just now ({result['error']})."
+    jobs = result or []
+    # This template gets reused verbatim for whatever normalized text
+    # first taught the cache "this means get_my_jobs()" — which can be a
+    # phrasing that named someone else ("show me Jane's jobs" resolves to
+    # this same safe, zero-arg call, since that's the only jobs-listing
+    # tool that exists). Without this line, a cache hit on a message like
+    # that reads as a non-sequitur: it never acknowledges what was asked,
+    # just lists a different user's jobs than the one named. This line is
+    # the fix — always state the guarantee, so the reply makes sense
+    # regardless of how the question was worded, instead of silently
+    # answering a blander question than the one actually asked.
+    prefix = "(This always shows only your own jobs, no matter how the question is worded.) "
+    if not jobs:
+        return prefix + "You don't have any dice jobs yet."
+    plural = "s" if len(jobs) != 1 else ""
+    lines = [prefix + f"You have {len(jobs)} dice job{plural}:"]
+    lines += [f"- {job.get('job_name', '(unnamed job)')}" for job in jobs]
+    return "\n".join(lines)
+
+
+def _render_stock_reply(result) -> str:
+    if isinstance(result, dict) and "error" in result:
+        return f"I couldn't look up the shared reference data just now ({result['error']})."
+    material_types = result.get("material_types") or []
+    production_methods = result.get("production_methods") or []
+    colours = result.get("dice_job_number_colours") or []
+    return "\n".join(
+        [
+            "Here's the shared reference data available for creating a dice job:",
+            "- Material types: " + (", ".join(m["description"] for m in material_types) or "none yet"),
+            "- Production methods: "
+            + (", ".join(m["description"] for m in production_methods) or "none yet"),
+            "- Dice job number colours: "
+            + (", ".join(c["dice_job_number_colour_name"] for c in colours) or "none yet"),
+        ]
+    )
+
+
+# One hand-written template per cacheable tool (app/prompt_cache.py) — used
+# only on a cache hit, where there's no model turn left to phrase a reply,
+# just a real, freshly-fetched, correctly-scoped result to describe in
+# plain language. Deliberately plain and mechanical rather than clever:
+# the point of a cache hit is skipping the model entirely, not imitating it.
+_CACHED_REPLY_RENDERERS = {
+    "get_my_jobs": _render_my_jobs_reply,
+    "list_stock": _render_stock_reply,
+}
+
+
+@router.get("/cache-stats")
+def cache_stats(_token: str = Depends(current_user_token)):
+    """Hit/miss counts, how many prompt->tool patterns have been learned so
+    far, and average turn duration for cached vs. uncached turns (see
+    app/prompt_cache.py) — the actual evidence for whether the cache is
+    worth having, not just whether it's firing. No prompt text, no user
+    data, and no per-user breakdown lives here — it's aggregate counts and
+    averages only, which is also why this is safe to serve to any
+    authenticated user rather than needing its own authorization story."""
+    return prompt_cache.stats()
+
+
 @router.post("/chat")
 async def chat(payload: dict, token: str = Depends(current_user_token)):
     """payload: {"message": str, "history": [{"role": "user"|"assistant", "content": str}, ...]}
 
-    Returns {"reply": str, "toolCalls": [{"name": str, "arguments": dict, "result": Any}, ...]}
-    — toolCalls is the full trace of what the model actually called this
-    turn, so the UI can show it: the point of this demo is watching that
-    trace stay confined to the logged-in user's own data no matter how the
-    chat message is worded.
+    Returns {"reply": str, "toolCalls": [...], "cached": bool, "tookMs": float}
+    — toolCalls is the full trace of what actually ran this turn (each
+    entry also says whether IT was cached), so the UI can show it: the
+    point of this demo is watching that trace stay confined to the
+    logged-in user's own data no matter how the chat message is worded, or
+    whether it came from the model or from the cache. tookMs is wall-clock
+    time for this whole turn, measured server-side (from the moment this
+    handler started to the moment it's about to respond) so it's directly
+    comparable across turns regardless of client-side network variance —
+    that's the actual evidence for "caching makes this faster," not just
+    the hit/miss counters on their own.
+
+    Cache-hit path (Phase 8, see app/prompt_cache.py): if this exact
+    message has previously resolved to one of the two zero-argument,
+    read-only tools, skip Ollama entirely — both the "which tool" reasoning
+    and the "how do I phrase this" reasoning — and go straight to calling
+    that tool for real, through THIS caller's own forwarded token, then
+    describe the result with a plain template. Nothing about who is asking
+    changes which tool gets called or what data comes back; only whether a
+    model had to be asked which tool to use.
     """
+    start = time.perf_counter()
+
+    def _took_ms() -> float:
+        return round((time.perf_counter() - start) * 1000, 1)
+
     message = payload.get("message")
     if not message:
         raise HTTPException(status_code=422, detail="message is required")
     history = payload.get("history") or []
+
+    cached_tool_name = prompt_cache.lookup(message)
+    if cached_tool_name is not None:
+        result = await _call_tool(cached_tool_name, {}, token)
+        reply = _scrub_internal_names(_CACHED_REPLY_RENDERERS[cached_tool_name](result))
+        took_ms = _took_ms()
+        prompt_cache.record_timing(was_cached=True, duration_ms=took_ms)
+        return {
+            "reply": reply,
+            "toolCalls": [{"name": cached_tool_name, "arguments": {}, "result": result, "cached": True}],
+            "cached": True,
+            "tookMs": took_ms,
+        }
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(history) + [
         {"role": "user", "content": message}
@@ -266,7 +365,25 @@ async def chat(payload: dict, token: str = Depends(current_user_token)):
 
             if not tool_calls:
                 reply = _scrub_internal_names(assistant_message.get("content", ""))
-                return {"reply": reply, "toolCalls": tool_call_trace}
+                # Learn from this turn (Phase 8) only when it was the
+                # simplest possible shape: exactly one tool call, to one of
+                # the two cacheable tools, with no arguments, immediately
+                # followed by a final answer. A multi-step turn (e.g.
+                # list_stock() then create_job(...)) never qualifies —
+                # list_stock() there is a means to an end, not "the whole
+                # answer to what was asked", and remembering it in that
+                # context would (harmlessly, but wrongly) serve a
+                # create-job request's setup step as if it were a
+                # standalone "show me the stock" question.
+                if (
+                    len(tool_call_trace) == 1
+                    and tool_call_trace[0]["name"] in prompt_cache.CACHEABLE_TOOLS
+                    and not tool_call_trace[0]["arguments"]
+                ):
+                    prompt_cache.remember(message, tool_call_trace[0]["name"])
+                took_ms = _took_ms()
+                prompt_cache.record_timing(was_cached=False, duration_ms=took_ms)
+                return {"reply": reply, "toolCalls": tool_call_trace, "cached": False, "tookMs": took_ms}
 
             messages.append(assistant_message)
             for call in tool_calls:
@@ -274,10 +391,14 @@ async def chat(payload: dict, token: str = Depends(current_user_token)):
                 name = function.get("name")
                 arguments = _parse_tool_arguments(function.get("arguments"))
                 result = await _call_tool(name, arguments, token)
-                tool_call_trace.append({"name": name, "arguments": arguments, "result": result})
+                tool_call_trace.append({"name": name, "arguments": arguments, "result": result, "cached": False})
                 messages.append({"role": "tool", "content": json.dumps(result)})
 
+        took_ms = _took_ms()
+        prompt_cache.record_timing(was_cached=False, duration_ms=took_ms)
         return {
             "reply": "Stopped after several tool calls without a final answer — try rephrasing.",
             "toolCalls": tool_call_trace,
+            "cached": False,
+            "tookMs": took_ms,
         }
